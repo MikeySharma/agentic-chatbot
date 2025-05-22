@@ -1,4 +1,4 @@
-## 🛠️ Project Setup Guide for `agentic-chatbot`
+## 🛠️ Project Setup Guide for `agentic-chatbot-weather`
 
 ### 1. **Clone the Repository**
 
