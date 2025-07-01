@@ -75,7 +75,7 @@ class TextRequest(BaseModel):
 # Initialize sentiment analyzer
 analyzer = SentimentAnalyzer()
 
-@app.post("/predict")
+@app.post("/predict-sentiment")
 async def predict(request: TextRequest):
     return analyzer.predict_batch(request.text)
 
