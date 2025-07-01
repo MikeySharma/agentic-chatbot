@@ -1,5 +1,5 @@
 {
-  "_name_or_path": "./tinybert-sentiment/",
+  "_name_or_path": "huawei-noah/TinyBERT_General_4L_312D",
   "architectures": [
     "BertForSequenceClassification"
   ],
