@@ -7,7 +7,8 @@ import dotenv from "dotenv";
 import { NewsArticle } from "../types/news-sentiment.types";
 import chatgptRequest from "../config/chatgptRequest";
 import { CHATBOT_SYSTEM_PROMPTS } from "../constants/ai.constants";
-import { fetchAllFinancialData } from "../service/financial-data.service";
+import { fetchCompanyProfile } from "../service/financial-data.service";
+import { extractKeyPoints } from "../service/news-sentiment.service";
 dotenv.config();
 
 const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
@@ -28,21 +29,20 @@ export const stockSentimentAnalysisTool = new DynamicStructuredTool({
                 return "Invalid ticker symbol format (1-5 letters).";
             }
             const [resultsFromTavily, allFinancialData] = await Promise.all([
-                fetchFromTavily(userQuery),
-                fetchAllFinancialData(symbol)
+                fetchFromTavily(userQuery, symbol),
+                fetchCompanyProfile(symbol),
             ]);
 
             if (!resultsFromTavily) {
                 return "No data found from searching on web.";
             }
 
-            const filteredResults = await sortAndRemoveDuplicate(resultsFromTavily);
-
-            const analyzedSentiment = await analyzeSentiment(allFinancialData, filteredResults, userQuery);
+            const keyPoints = resultsFromTavily.map(extractKeyPoints)
+            const analyzedSentiment = await analyzeSentiment(allFinancialData, userQuery);
 
 
             //save to dump
-            saveToDumps({ refinedQuery: userQuery, counts: { filtered: filteredResults.length, total: resultsFromTavily.length }, analyzedSentiment, allFinancialData, filteredResults, resultsFromTavily }, symbol);
+            saveToDumps({ refinedQuery: userQuery, counts: { total: resultsFromTavily.length }, keyPoints, analyzedSentiment, allFinancialData, resultsFromTavily }, symbol);
             //return the final results
             return JSON.stringify(analyzedSentiment);
 
@@ -53,59 +53,46 @@ export const stockSentimentAnalysisTool = new DynamicStructuredTool({
     },
 });
 
-
-export const fetchFromTavily = async (query: string): Promise<NewsArticle[] | null> => {
+export const fetchFromTavily = async (query: string, symbol: string): Promise<NewsArticle[] | null> => {
     try {
+        // 1. Time-bound Query Enhancement
+        const dateFilter = new Date();
+        dateFilter.setDate(dateFilter.getDate() - 3); // Only last 72h news
 
-        const response = await tvly.search(query, {
-            searchDepth: "advanced",
-            includeRawContent: false,
-            includeImages: false,
-            maxResults: 5
-        })
-        const data = response.results.map(result => ({
-            title: result.title,
-            rawContent: result.rawContent,
-            text: result.content,
-            publishedDate: result.publishedDate,
-            url: result.url,
-            score: result.score
-        }));
-        return data;
-    } catch (error) {
-        console.error('Error', error);
-        return null;
-    }
-}
+        const enhancedQuery = `${query} about ${symbol} stock ${dateFilter.toISOString().split('T')[0]}..`;
 
-
-export const sortAndRemoveDuplicate = async (allResults: NewsArticle[]) => {
-    try {
-        if (!Array.isArray(allResults)) {
-            console.error('Invalid input: expected an array');
-            return [];
-        }
-
-        // First, remove exact URL duplicates
-        const urlSeen = new Set<string>();
-        const uniqueArticles = allResults.filter(article => {
-            if (urlSeen.has(article.url)) {
-                return false;
+        // 2. Multi-Parameter Search Configuration
+        const response = await tvly.search(enhancedQuery, {
+            search_depth: "advanced",
+            include_raw_content: false, // Critical for sentiment analysis
+            include_images: false,
+            max_results: 15, // Increased from 5 for better coverage
+            sort: "newest", // Ensures chronological freshness
+            filters: {
+                max_age: "72h" // Hard freshness cutoff
             }
-            urlSeen.add(article.url);
-            return true;
         });
 
-        //second, remove those search results which doesn't have enough data or rawContent
-        // const filteredArticles = uniqueArticles.filter(article => article.rawContent !== null);
 
-        // Finally, sort by score (descending)
-        return uniqueArticles.sort((a, b) => b.score - a.score);
+
+        // 4. Dynamic Sorting (relevance + freshness)
+        return response.results.filter((value) => (value.content.length > 50)).sort((a, b) => (b.score - a.score)).slice(0, 10).map((value) => {
+            return ({
+                title: value.title,
+                publishedDate: value.publishedDate,
+                content: value.content,
+                score: value.score,
+                url: value.url
+            })
+        }); // Return top 10 most relevant
+
     } catch (error) {
-        console.error('Error in sortAndRemoveDuplicate:', error);
-        return allResults; // Return original if error occurs
+        console.error('Tavily fetch error:', error);
+        // Fallback to cached data if available
+        return null;
     }
 };
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const saveToDumps = async (data: any, symbol: string) => {
@@ -124,7 +111,7 @@ export const saveToDumps = async (data: any, symbol: string) => {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const analyzeSentiment = async (currentFinancialData: any, news: any, userQuery: string) => {
+export const analyzeSentiment = async (data: any, userQuery: string) => {
     try {
         const response = await chatgptRequest({
             messages: [
@@ -140,10 +127,7 @@ export const analyzeSentiment = async (currentFinancialData: any, news: any, use
                         Provide a thorough analysis of the stock using structured financial and news data.
 
                         DATA PROVIDED:
-
-                        Financial & Stock Latest Data: ${currentFinancialData}
-
-                        Recent News & Sentiment: ${news}
+                        Financial Data & news: ${data}
 
                         INSTRUCTIONS:
 

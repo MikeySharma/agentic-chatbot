@@ -23,8 +23,10 @@
     "typescript-eslint": "^8.32.1"
   },
   "dependencies": {
-    "@langchain/langgraph": "^0.2.73",
-    "@langchain/openai": "^0.5.11",
+    "@langchain/core": "^0.3.61",
+    "@langchain/langgraph": "^0.2.74",
+    "@langchain/langgraph-checkpoint": "^0.0.18",
+    "@langchain/openai": "^0.5.16",
     "@tavily/core": "^0.5.8",
     "axios": "^1.9.0",
     "cors": "^2.8.5",

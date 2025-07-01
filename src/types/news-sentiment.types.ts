@@ -1,7 +1,6 @@
 export interface NewsArticle {
     title: string;
-    rawContent: string | undefined;
-    text: string;
+    content: string;
     publishedDate: string;
     url: string;
     score: number;
