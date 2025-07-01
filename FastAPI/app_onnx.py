@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import re
 from huggingface_hub import hf_hub_download
+from typing import List
 
 app = FastAPI()
 
@@ -15,65 +16,68 @@ class SentimentAnalyzer:
         model_path = hf_hub_download(repo_id=model_repo, filename="model.onnx")
         self.session = ort.InferenceSession(model_path)
         self.tokenizer = AutoTokenizer.from_pretrained(model_repo)
-        self.labels = ["negative", "neutral", "positive"]  # Hard-coded labels
-        
-    def predict(self, text):
-        # Preprocess
-        text = preprocess_text(text)
-        
-        # Tokenize
+        self.labels = ["negative", "neutral", "positive"]
+
+    def predict_batch(self, texts: List[str]):
+        # Preprocess all texts
+        cleaned_texts = [preprocess_text(t) for t in texts]
+
+        # Tokenize batch
         inputs = self.tokenizer(
-            text,
-            padding="max_length",
+            cleaned_texts,
+            padding=True,
             truncation=True,
             max_length=128,
             return_tensors="np",
             return_token_type_ids=True
         )
-        
-        # Run inference
+
+        # Run ONNX inference
         outputs = self.session.run(
             None,
             {
                 "input_ids": inputs["input_ids"].astype(np.int64),
                 "attention_mask": inputs["attention_mask"].astype(np.int64),
-                "token_type_ids": inputs["token_type_ids"].astype(np.int64)
+                "token_type_ids": inputs["token_type_ids"].astype(np.int64),
             }
         )
-        
-        # Get predictions
+
         logits = outputs[0]
         probabilities = torch.nn.functional.softmax(torch.from_numpy(logits), dim=-1)
-        predicted_class = np.argmax(logits, axis=-1)[0] # type: ignore
-        
-        return {
-            "sentiment": self.labels[predicted_class],
-            "confidence": float(probabilities[0][predicted_class]),
-            "probabilities": {
-                label: float(prob)
-                for label, prob in zip(self.labels, probabilities[0])
-            }
-        }
 
-# Preprocessing function
-def preprocess_text(text):
-    text = str(text).lower()  # Convert to lowercase
-    text = text.replace('$', '')  # Remove dollar signs (tickers)
-    # Remove URLs
+        predictions = []
+        for i in range(len(texts)):
+            pred_class = int(np.argmax(logits[i])) # type: ignore
+            pred = {
+                "text": texts[i],
+                "sentiment": self.labels[pred_class],
+                "confidence": float(probabilities[i][pred_class]),
+                "probabilities": {
+                    label: float(prob) for label, prob in zip(self.labels, probabilities[i])
+                }
+            }
+            predictions.append(pred)
+
+        return predictions
+
+# Preprocessing helper
+def preprocess_text(text: str) -> str:
+    text = str(text).lower()
+    text = text.replace('$', '')
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
-    # Remove special characters except basic punctuation
     text = re.sub(r'[^\w\s.,!?]', '', text)
     return text.strip()
 
-# Initialize analyzer
-analyzer = SentimentAnalyzer()
-
+# Request schema
 class TextRequest(BaseModel):
-    text: str
+    text: List[str]
+
+# Initialize sentiment analyzer
+analyzer = SentimentAnalyzer()
 
 @app.post("/predict")
 async def predict(request: TextRequest):
-    return analyzer.predict(request.text)
+    return analyzer.predict_batch(request.text)
 
 if __name__ == "__main__":
     import uvicorn
